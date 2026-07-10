@@ -3,7 +3,7 @@
   "displayName": "objdiff",
   "description": "A local diffing tool for decompilation projects",
   "publisher": "decomp-dev",
-  "version": "3.6.1",
+  "version": "3.7.3",
   "repository": {
     "type": "git",
     "url": "https://github.com/encounter/objdiff-web"
@@ -24,7 +24,7 @@
     "@vscode/codicons": "^0.0.36",
     "clsx": "^2.1.1",
     "memoize-one": "^6.0.0",
-    "objdiff-wasm": "=3.6.1",
+    "objdiff-wasm": "=3.7.3",
     "picomatch": "^4.0.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -112,6 +112,44 @@
       {
         "title": "General",
         "properties": {
+          "objdiff.preferredStringEncoding": {
+            "type": "string",
+            "description": "Which encoding to use when diffing string literals used in functions.",
+            "default": "auto",
+            "enum": [
+              "auto",
+              "ascii",
+              "utf_8",
+              "shift_jis",
+              "windows_1252",
+              "euc_jp",
+              "big5",
+              "utf_16be",
+              "utf_16le"
+            ],
+            "enumItemLabels": [
+              "Auto",
+              "ASCII",
+              "UTF-8",
+              "Shift JIS",
+              "Windows-1252",
+              "EUC-JP",
+              "Big5",
+              "UTF-16BE",
+              "UTF-16LE"
+            ],
+            "enumDescriptions": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
           "objdiff.functionRelocDiffs": {
             "type": "string",
             "description": "How relocation targets will be diffed in the function view.",
@@ -357,6 +395,11 @@
           "objdiff.mips.registerPrefix": {
             "type": "boolean",
             "description": "Display MIPS register names with a '$' prefix.",
+            "default": false
+          },
+          "objdiff.mips.prodgSnAsInvertedRegs": {
+            "type": "boolean",
+            "description": "Changes the register order for specific R5900EE instructions to match the syntax used by the SN AS from ProDG (-snas flag).",
             "default": false
           }
         }
