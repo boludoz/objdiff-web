@@ -6,6 +6,11 @@ import { memo, useCallback, useMemo, useRef } from 'react';
 import { FixedSizeList, areEqual } from 'react-window';
 import type { ListChildComponentProps, ListOnScrollProps } from 'react-window';
 import { useShallow } from 'zustand/react/shallow';
+import {
+  type AsmSpan,
+  instructionRowToSpans,
+  isDiffRow,
+} from '../../shared/render/asm';
 import { createContextMenu } from '../common/ContextMenu';
 import { createTooltip } from '../common/TooltipShared';
 import { buildDiffConfig, useAppStore, useExtensionStore } from '../state';
@@ -28,6 +33,22 @@ const ROTATION_CLASSES = [
   styles.rotation7,
   styles.rotation8,
 ];
+
+const COLOR_CLASSES: Record<AsmSpan['color'], string | undefined> = {
+  normal: undefined,
+  dim: styles.segmentDim,
+  bright: styles.segmentBright,
+  replace: styles.segmentReplace,
+  'data-flow': styles.segmentDataFlow,
+  delete: styles.segmentDelete,
+  insert: styles.segmentInsert,
+  rotating: undefined,
+};
+
+const colorClass = (span: AsmSpan): string | undefined =>
+  span.color === 'rotating'
+    ? ROTATION_CLASSES[span.rotation ?? 0]
+    : COLOR_CLASSES[span.color];
 
 export type InstructionTooltipContent = {
   column: number;
@@ -82,139 +103,37 @@ const AsmCell = ({
   }
 
   const highlight = highlightColumn(highlightState, column);
-  const out: React.ReactNode[] = [];
 
   const insRow = display.displayInstructionRow(obj, symbol, row, config);
-  let index = 0;
-  for (const segment of insRow.segments) {
-    let className: string | undefined;
-    switch (segment.color.tag) {
-      case 'normal':
-        break;
-      case 'dim':
-        className = styles.segmentDim;
-        break;
-      case 'bright':
-        className = styles.segmentBright;
-        break;
-      case 'replace':
-        className = styles.segmentReplace;
-        break;
-      case 'delete':
-        className = styles.segmentDelete;
-        break;
-      case 'insert':
-        className = styles.segmentInsert;
-        break;
-      case 'rotating':
-        className =
-          ROTATION_CLASSES[segment.color.val % ROTATION_CLASSES.length];
-        break;
-      default:
-        console.warn('Unknown color type', segment.color);
-        break;
-    }
-    const t = segment.text;
-    let text = '';
-    let postText = ''; // unhighlightable text after the token
-    let isToken = false;
-    switch (t.tag) {
-      case 'basic':
-        text = t.val;
-        break;
-      case 'line':
-        text = t.val.toString(10);
-        break;
-      case 'address':
-        text = t.val.toString(16);
-        postText = ':';
-        isToken = true;
-        break;
-      case 'opcode':
-        text = t.val.mnemonic;
-        isToken = true;
-        break;
-      case 'signed':
-        if (t.val < 0) {
-          text = `-0x${(-t.val).toString(16)}`;
-        } else {
-          text = `0x${t.val.toString(16)}`;
-        }
-        isToken = true;
-        break;
-      case 'unsigned':
-        text = `0x${t.val.toString(16)}`;
-        isToken = true;
-        break;
-      case 'opaque':
-        text = t.val;
-        isToken = true;
-        break;
-      case 'branch-dest':
-        text = t.val.toString(16);
-        isToken = true;
-        break;
-      case 'branch-arrow':
-        text = ' ~> ';
-        isToken = true;
-        break;
-      case 'symbol':
-        text = t.val.demangledName || t.val.name;
-        isToken = true;
-        break;
-      case 'addend':
-        if (t.val < 0) {
-          text = `-0x${(-t.val).toString(16)}`;
-        } else {
-          text = `+0x${t.val.toString(16)}`;
-        }
-        break;
-      case 'spacing':
-        text = ' '.repeat(t.val);
-        break;
-      case 'eol':
-        continue;
-      default:
-        console.warn('Unknown text type', t);
-        break;
-    }
-    out.push(
+  const out = instructionRowToSpans(insRow).map((span, index) => {
+    const t = span.token;
+    return (
       <span
+        // biome-ignore lint/suspicious/noArrayIndexKey: spans are positional
         key={index}
-        className={clsx(className, {
-          [styles.highlightable]: isToken,
-          [styles.highlighted]: highlightMatches(highlight, t),
+        className={clsx(colorClass(span), {
+          [styles.highlightable]: t != null,
+          [styles.highlighted]: t != null && highlightMatches(highlight, t),
         })}
         onClick={(e) => {
+          if (t == null) {
+            return;
+          }
           if (t.tag === 'branch-arrow') {
             listRef.current?.scrollToItem(t.val, 'center');
-          } else if (isToken) {
+          } else {
             setHighlight(updateHighlight(highlightState, t, column));
             e.stopPropagation();
           }
         }}
       >
-        {text}
-      </span>,
+        {span.text}
+      </span>
     );
-    index++;
-    if (postText) {
-      out.push(
-        <span key={index} className={className}>
-          {postText}
-        </span>,
-      );
-      index++;
-    }
-    if (segment.padTo > text.length + postText.length) {
-      const spacing = ' '.repeat(segment.padTo - text.length - postText.length);
-      out.push(<span key={index}>{spacing}</span>);
-      index++;
-    }
-  }
+  });
 
   const classes = [styles.instructionCell];
-  if (insRow.diffKind !== 'none') {
+  if (isDiffRow(insRow.diffKind)) {
     classes.push(styles.diffAny);
   }
   if (!out.length) {

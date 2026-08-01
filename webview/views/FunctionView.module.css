@@ -47,6 +47,9 @@
 .segment-insert {
   color: var(--color-green);
 }
+.segment-data-flow {
+  color: var(--color-data-flow);
+}
 
 .rotation0 {
   color: light-dark(
