@@ -109,6 +109,33 @@
   flex: 0 0 auto;
 }
 
+.section-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 4px;
+  font-size: 0.78em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+  border-top: 1px solid var(--panel-separator);
+  margin-top: 4px;
+}
+
+.section-divider::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--panel-separator);
+}
+
+.section-hint {
+  font-weight: 400;
+  font-size: 0.9em;
+  opacity: 0.7;
+}
+
 kbd {
   font-family: var(--code-font-family);
   border: 1px solid var(--panel-separator);

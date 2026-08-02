@@ -6,9 +6,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { type MatchRange, fuzzyMatchSymbol } from '../../shared/fuzzy';
 import type { DiffOutput } from '../diff';
-import { type SymbolRefByName, useAppStore, useExtensionStore } from '../state';
+import {
+  type SymbolRefByName,
+  setCurrentUnit,
+  useAppStore,
+  useExtensionStore,
+} from '../state';
 import { splitRanges } from '../util/symbolSearch';
 import PercentBadge from './PercentBadge';
+import { type ApiSymbol, useProjectSymbolSearch } from './SymbolSearchResults';
 
 const MAX_RESULTS = 200;
 
@@ -61,12 +67,8 @@ const collectEntries = (
   return entries;
 };
 
-/**
- * Command-palette style "go to symbol", opened with Ctrl+P or Ctrl+Shift+O.
- *
- * Searches both sides at once so you can jump straight to a function without
- * first working out which column it lives in.
- */
+const MAX_GLOBAL = 50;
+
 export const SymbolPalette = ({
   result,
   onClose,
@@ -77,12 +79,19 @@ export const SymbolPalette = ({
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
-  const setSelectedSymbol = useAppStore((state) => state.setSelectedSymbol);
+  const { setSelectedSymbol } = useAppStore(
+    useShallow((state) => ({ setSelectedSymbol: state.setSelectedSymbol })),
+  );
+  const { currentUnitName, projectUnits } = useExtensionStore(
+    useShallow((state) => ({
+      currentUnitName: state.currentUnit?.name ?? '',
+      projectUnits: state.projectConfig?.units ?? [],
+    })),
+  );
 
+  // ── Local symbols (current file) ────────────────────────────────────────
   const entries = useMemo(() => {
     const left = collectEntries(result.diff?.left, result.diff?.right, 'left');
-    // Only include base symbols that have no target counterpart, so matched
-    // functions don't appear twice.
     const leftTargets = new Set(
       left.map((e) => e.targetName).filter((n): n is string => n != null),
     );
@@ -117,22 +126,30 @@ export const SymbolPalette = ({
     return out.slice(0, MAX_RESULTS);
   }, [entries, query]);
 
-  // Reset the highlight whenever the result set changes under it.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: ranked is the signal
-  useEffect(() => setSelected(0), [ranked]);
+  // ── Global symbols (other files via API) ────────────────────────────────
+  const globalState = useProjectSymbolSearch(query);
+  const globalItems = useMemo<ApiSymbol[]>(() => {
+    if (globalState.status !== 'done') return [];
+    return globalState.results
+      .filter((r) => r.unit !== currentUnitName)
+      .slice(0, MAX_GLOBAL);
+  }, [globalState, currentUnitName]);
 
-  // Keep the highlighted row in view as the selection moves.
+  const totalCount = ranked.length + globalItems.length;
+
+  // Reset selection when results change.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: ranked+globalItems are the signal
+  useEffect(() => setSelected(0), [ranked, globalItems]);
+
+  // Keep highlighted row in view.
   useEffect(() => {
     listRef.current
       ?.querySelector(`[data-index="${selected}"]`)
       ?.scrollIntoView({ block: 'nearest' });
   }, [selected]);
 
-  const choose = useCallback(
-    (entry: Ranked | undefined) => {
-      if (!entry) {
-        return;
-      }
+  const chooseLocal = useCallback(
+    (entry: Ranked) => {
       const self: SymbolRefByName = {
         symbolName: entry.name,
         sectionName: entry.sectionName,
@@ -150,6 +167,32 @@ export const SymbolPalette = ({
     [setSelectedSymbol, onClose],
   );
 
+  const chooseGlobal = useCallback(
+    (symbol: ApiSymbol) => {
+      const unit = projectUnits.find((u) => u.name === symbol.unit);
+      if (!unit) return;
+      const ref: SymbolRefByName = {
+        symbolName: symbol.name,
+        sectionName: symbol.section,
+      };
+      setSelectedSymbol(ref, ref);
+      setCurrentUnit(unit);
+      onClose();
+    },
+    [projectUnits, setSelectedSymbol, onClose],
+  );
+
+  const chooseByIndex = useCallback(
+    (index: number) => {
+      if (index < ranked.length) {
+        chooseLocal(ranked[index]);
+      } else {
+        chooseGlobal(globalItems[index - ranked.length]);
+      }
+    },
+    [ranked, globalItems, chooseLocal, chooseGlobal],
+  );
+
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       switch (e.key) {
@@ -159,12 +202,12 @@ export const SymbolPalette = ({
           break;
         case 'ArrowDown':
           e.preventDefault();
-          setSelected((i) => (ranked.length ? (i + 1) % ranked.length : 0));
+          setSelected((i) => (totalCount ? (i + 1) % totalCount : 0));
           break;
         case 'ArrowUp':
           e.preventDefault();
           setSelected((i) =>
-            ranked.length ? (i - 1 + ranked.length) % ranked.length : 0,
+            totalCount ? (i - 1 + totalCount) % totalCount : 0,
           );
           break;
         case 'Home':
@@ -173,15 +216,15 @@ export const SymbolPalette = ({
           break;
         case 'End':
           e.preventDefault();
-          setSelected(Math.max(0, ranked.length - 1));
+          setSelected(Math.max(0, totalCount - 1));
           break;
         case 'Enter':
           e.preventDefault();
-          choose(ranked[selected]);
+          chooseByIndex(selected);
           break;
       }
     },
-    [ranked, selected, choose, onClose],
+    [totalCount, selected, chooseByIndex, onClose],
   );
 
   return (
@@ -217,6 +260,7 @@ export const SymbolPalette = ({
           </div>
         </div>
         <div className={styles.list} ref={listRef}>
+          {/* Current file results */}
           {ranked.length === 0 ? (
             <div className={styles.empty}>
               {entries.length === 0
@@ -226,14 +270,14 @@ export const SymbolPalette = ({
           ) : (
             ranked.map((entry, index) => (
               <div
-                key={`${entry.side}-${entry.sectionName}-${entry.name}`}
+                key={`local-${entry.side}-${entry.sectionName}-${entry.name}`}
                 data-index={index}
                 className={clsx(
                   styles.row,
                   index === selected && styles.selected,
                 )}
                 onMouseMove={() => setSelected(index)}
-                onClick={() => choose(entry)}
+                onClick={() => chooseLocal(entry)}
                 onKeyDown={undefined}
               >
                 <span className={styles.side}>
@@ -261,6 +305,52 @@ export const SymbolPalette = ({
               </div>
             ))
           )}
+
+          {/* Other files divider + results */}
+          {(globalState.status === 'loading' ||
+            globalState.status === 'done') && (
+            <div className={styles.sectionDivider}>
+              <span>Other files</span>
+              {globalState.status === 'loading' && (
+                <span className={styles.sectionHint}>searching…</span>
+              )}
+              {globalState.status === 'done' && globalItems.length > 0 && (
+                <span className={styles.sectionHint}>
+                  {globalItems.length}
+                  {globalState.results.filter((r) => r.unit !== currentUnitName)
+                    .length > MAX_GLOBAL
+                    ? '+'
+                    : ''}
+                </span>
+              )}
+            </div>
+          )}
+          {globalItems.map((symbol, i) => {
+            const index = ranked.length + i;
+            return (
+              <div
+                key={`global-${symbol.unit}-${symbol.section}-${symbol.name}`}
+                data-index={index}
+                className={clsx(
+                  styles.row,
+                  index === selected && styles.selected,
+                )}
+                onMouseMove={() => setSelected(index)}
+                onClick={() => chooseGlobal(symbol)}
+                onKeyDown={undefined}
+              >
+                <span className={styles.name}>
+                  {symbol.demangledName || symbol.name}
+                </span>
+                <span className={styles.section}>{symbol.unit}</span>
+                {symbol.matchPercent != null && (
+                  <span className={styles.percent}>
+                    <PercentBadge percent={symbol.matchPercent} />
+                  </span>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>

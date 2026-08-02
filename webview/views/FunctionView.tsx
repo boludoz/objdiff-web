@@ -2,7 +2,7 @@ import styles from './FunctionView.module.css';
 
 import clsx from 'clsx';
 import { type diff, display } from 'objdiff-wasm';
-import { memo, useCallback, useMemo, useRef } from 'react';
+import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { FixedSizeList, areEqual } from 'react-window';
 import type { ListChildComponentProps, ListOnScrollProps } from 'react-window';
 import { useShallow } from 'zustand/react/shallow';
@@ -162,6 +162,9 @@ type ItemData = {
   highlight: HighlightState;
   setHighlight: (highlight: HighlightState) => void;
   listRef: React.RefObject<FixedSizeList<ItemData>>;
+  splitRatio: number;
+  onDividerMouseDown: (e: React.MouseEvent) => void;
+  onColMouseDown: (side: 'left' | 'right') => void;
 };
 
 const AsmRow = memo(
@@ -176,6 +179,9 @@ const AsmRow = memo(
       highlight,
       setHighlight,
       listRef,
+      splitRatio,
+      onDividerMouseDown,
+      onColMouseDown,
     },
   }: ListChildComponentProps<ItemData>) => {
     return (
@@ -193,26 +199,39 @@ const AsmRow = memo(
           }
         }}
       >
-        <AsmCell
-          obj={result.left}
-          config={config}
-          symbol={leftSymbol?.info.id ?? null}
-          row={index}
-          column={0}
-          highlight={highlight}
-          setHighlight={setHighlight}
-          listRef={listRef}
-        />
-        <AsmCell
-          obj={result.right}
-          config={config}
-          symbol={rightSymbol?.info.id ?? null}
-          row={index}
-          column={1}
-          highlight={highlight}
-          setHighlight={setHighlight}
-          listRef={listRef}
-        />
+        <div
+          className={styles.colLeft}
+          style={{ flex: `0 0 ${splitRatio * 100}%` }}
+          onMouseDown={() => onColMouseDown('left')}
+        >
+          <AsmCell
+            obj={result.left}
+            config={config}
+            symbol={leftSymbol?.info.id ?? null}
+            row={index}
+            column={0}
+            highlight={highlight}
+            setHighlight={setHighlight}
+            listRef={listRef}
+          />
+        </div>
+        <div className={styles.divider} onMouseDown={onDividerMouseDown} />
+        <div
+          className={styles.colRight}
+          style={{ flex: '1 1 0' }}
+          onMouseDown={() => onColMouseDown('right')}
+        >
+          <AsmCell
+            obj={result.right}
+            config={config}
+            symbol={rightSymbol?.info.id ?? null}
+            row={index}
+            column={1}
+            highlight={highlight}
+            setHighlight={setHighlight}
+            listRef={listRef}
+          />
+        </div>
       </div>
     );
   },
@@ -233,6 +252,57 @@ export const InstructionList = ({
   rightSymbol: display.SymbolDisplay | null;
 }) => {
   const listRef = useRef<FixedSizeList<ItemData>>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [splitRatio, setSplitRatio] = useState(0.5);
+  const splitRatioRef = useRef(splitRatio);
+  splitRatioRef.current = splitRatio;
+
+  const cleanupSelectingRef = useRef<(() => void) | null>(null);
+
+  const onColMouseDown = useCallback((side: 'left' | 'right') => {
+    const container = containerRef.current;
+    if (!container) return;
+    // Remove any previous cleanup listener before setting new one
+    cleanupSelectingRef.current?.();
+    container.dataset.selecting = side;
+    const onNextMouseDown = () => {
+      delete container.dataset.selecting;
+      document.removeEventListener('mousedown', onNextMouseDown, true);
+      cleanupSelectingRef.current = null;
+    };
+    cleanupSelectingRef.current = () => {
+      document.removeEventListener('mousedown', onNextMouseDown, true);
+    };
+    // Use capture so we clean up before the new column's onMouseDown runs
+    document.addEventListener('mousedown', onNextMouseDown, true);
+  }, []);
+
+  const onDividerMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startRatio = splitRatioRef.current;
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      const onMouseMove = (ev: MouseEvent) => {
+        const newRatio = Math.max(
+          0.15,
+          Math.min(0.85, startRatio + (ev.clientX - startX) / width),
+        );
+        setSplitRatio(newRatio);
+      };
+      const onMouseUp = () => {
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+      };
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    },
+    [width],
+  );
+
   const { configProperties, currentUnit } = useExtensionStore(
     useShallow((state) => ({
       configProperties: state.configProperties,
@@ -265,6 +335,9 @@ export const InstructionList = ({
       highlight,
       setHighlight,
       listRef,
+      splitRatio,
+      onDividerMouseDown,
+      onColMouseDown,
     };
   }, [
     diff,
@@ -273,6 +346,9 @@ export const InstructionList = ({
     configProperties,
     highlight,
     setHighlight,
+    splitRatio,
+    onDividerMouseDown,
+    onColMouseDown,
   ]);
   const currentUnitName = currentUnit?.name || '';
   const initialScrollOffset = useMemo(
@@ -294,18 +370,20 @@ export const InstructionList = ({
     [currentUnitName, itemData.symbolName, setSymbolScrollOffset],
   );
   return (
-    <FixedSizeList
-      ref={listRef}
-      height={height}
-      itemCount={itemData.itemCount}
-      itemSize={itemSize}
-      width={width}
-      itemData={itemData}
-      overscanCount={20}
-      onScroll={onScrollMemo}
-      initialScrollOffset={initialScrollOffset}
-    >
-      {AsmRow}
-    </FixedSizeList>
+    <div ref={containerRef} className={styles.instructionList}>
+      <FixedSizeList
+        ref={listRef}
+        height={height}
+        itemCount={itemData.itemCount}
+        itemSize={itemSize}
+        width={width}
+        itemData={itemData}
+        overscanCount={20}
+        onScroll={onScrollMemo}
+        initialScrollOffset={initialScrollOffset}
+      >
+        {AsmRow}
+      </FixedSizeList>
+    </div>
   );
 };

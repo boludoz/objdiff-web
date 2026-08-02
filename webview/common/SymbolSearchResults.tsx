@@ -31,7 +31,7 @@ const DEBOUNCE_MS = 400;
  * project's objects — so it is delegated to `/api/symbols`, which caches them.
  * Degrades to `unavailable` when no API server is running behind `/api`.
  */
-const useProjectSymbolSearch = (query: string): State => {
+export const useProjectSymbolSearch = (query: string): State => {
   const [state, setState] = useState<State>({ status: 'idle' });
 
   useEffect(() => {
@@ -99,8 +99,19 @@ export const SymbolSearchResults = ({
   const state = useProjectSymbolSearch(query);
   const setSelectedSymbol = useAppStore((s) => s.setSelectedSymbol);
 
-  if (state.status === 'idle' || state.status === 'unavailable') {
+  if (state.status === 'idle') {
     return null;
+  }
+  if (state.status === 'unavailable') {
+    return (
+      <div className={styles.results}>
+        <div className={styles.heading}>Functions</div>
+        <div className={styles.message}>
+          Symbol search requires the API server. Run{' '}
+          <code>pnpm dev</code> to enable it.
+        </div>
+      </div>
+    );
   }
 
   const open = (symbol: ApiSymbol) => {
